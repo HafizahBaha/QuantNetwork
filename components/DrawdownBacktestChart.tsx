@@ -1,14 +1,18 @@
 import React, { useId } from 'react';
-import { BacktestDataPoint } from '../types';
+import { BacktestDataPoint, SampleSplitMode } from '../types';
 
 interface DrawdownBacktestChartProps {
   series: BacktestDataPoint[];
   strategyName: string;
+  splitIndex?: number;
+  activeSplitMode?: SampleSplitMode;
 }
 
 export const DrawdownBacktestChart: React.FC<DrawdownBacktestChartProps> = ({
   series,
   strategyName,
+  splitIndex,
+  activeSplitMode = 'combined',
 }) => {
   const chartId = useId();
 
@@ -30,6 +34,14 @@ export const DrawdownBacktestChart: React.FC<DrawdownBacktestChartProps> = ({
   const getX = (i: number) => padding.left + (i / (totalPoints - 1)) * plotWidth;
   const getY = (dd: number) => padding.top + (dd / yMax) * plotHeight;
 
+  const isSplitVisible =
+    (activeSplitMode === 'combined' || activeSplitMode === 'full') &&
+    splitIndex !== undefined &&
+    splitIndex > 0 &&
+    splitIndex < totalPoints - 1;
+
+  const splitX = isSplitVisible && splitIndex ? getX(splitIndex) : null;
+
   // Paths
   const bPath = series.map((d, i) => `${getX(i).toFixed(1)},${getY(d.benchmarkDrawdown).toFixed(1)}`).join(' ');
   const sPath = series.map((d, i) => `${getX(i).toFixed(1)},${getY(d.strategyDrawdown).toFixed(1)}`).join(' ');
@@ -43,9 +55,16 @@ export const DrawdownBacktestChart: React.FC<DrawdownBacktestChartProps> = ({
   return (
     <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
       <div className="flex items-center justify-between mb-2">
-        <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-          Underwater Drawdown Profile
-        </h4>
+        <div className="flex items-center gap-2">
+          <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+            Underwater Peak-to-Trough Drawdown
+          </h4>
+          {splitX !== null && (
+            <span className="text-[10px] text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+              80% Train | 20% Test
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-4 text-xs font-mono">
           <span className="flex items-center gap-1.5 text-blue-700 font-semibold">
             <span className="w-2.5 h-1 rounded-full bg-blue-500 inline-block" /> {strategyName}
@@ -63,6 +82,18 @@ export const DrawdownBacktestChart: React.FC<DrawdownBacktestChartProps> = ({
             <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.25" />
           </linearGradient>
         </defs>
+
+        {/* Out-of-sample background highlight */}
+        {splitX !== null && (
+          <rect
+            x={splitX}
+            y={padding.top}
+            width={width - padding.right - splitX}
+            height={plotHeight}
+            fill="#3b82f6"
+            fillOpacity={0.035}
+          />
+        )}
 
         {/* Ticks */}
         {yTicks.map((tick, i) => {
@@ -97,6 +128,20 @@ export const DrawdownBacktestChart: React.FC<DrawdownBacktestChartProps> = ({
 
         {/* Strategy line */}
         <polyline fill="none" stroke="#2563eb" strokeWidth={2} points={sPath} />
+
+        {/* 80/20 Vertical split line */}
+        {splitX !== null && (
+          <line
+            x1={splitX}
+            y1={padding.top}
+            x2={splitX}
+            y2={padding.top + plotHeight}
+            stroke="#2563eb"
+            strokeWidth={1.5}
+            strokeDasharray="3 3"
+            opacity={0.7}
+          />
+        )}
       </svg>
     </div>
   );

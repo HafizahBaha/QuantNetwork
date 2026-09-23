@@ -291,6 +291,7 @@ const App: React.FC = () => {
             portfolios={reportData.portfolios}
             assets={activeAssets}
             stressConfig={stressConfig}
+            correlationThreshold={correlationThreshold}
           />
         );
       case 'portfolio':
@@ -439,7 +440,7 @@ const App: React.FC = () => {
                               }`}
                           >
                               {view === 'backtest'
-                                ? 'Backtest'
+                                ? 'Backtest (80/20)'
                                 : view === 'correlation'
                                 ? 'Correlation'
                                 : view === 'network'

@@ -1,16 +1,22 @@
 import React, { useState, useId } from 'react';
-import { BacktestDataPoint } from '../types';
+import { BacktestDataPoint, SampleSplitMode } from '../types';
 
 interface CumulativeReturnBacktestChartProps {
   series: BacktestDataPoint[];
   strategyName: string;
   strategyUniverse: string;
+  splitIndex?: number;
+  splitDateLabel?: string;
+  activeSplitMode?: SampleSplitMode;
 }
 
 export const CumulativeReturnBacktestChart: React.FC<CumulativeReturnBacktestChartProps> = ({
   series,
   strategyName,
   strategyUniverse,
+  splitIndex,
+  splitDateLabel,
+  activeSplitMode = 'combined',
 }) => {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const chartId = useId();
@@ -25,8 +31,8 @@ export const CumulativeReturnBacktestChart: React.FC<CumulativeReturnBacktestCha
 
   // Dimensions
   const width = 850;
-  const height = 380;
-  const padding = { top: 35, right: 35, bottom: 50, left: 65 };
+  const height = 390;
+  const padding = { top: 40, right: 35, bottom: 50, left: 65 };
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
 
@@ -43,6 +49,15 @@ export const CumulativeReturnBacktestChart: React.FC<CumulativeReturnBacktestCha
   const totalPoints = series.length;
   const getX = (i: number) => padding.left + (i / (totalPoints - 1)) * plotWidth;
   const getY = (val: number) => padding.top + plotHeight - ((val - yMin) / yRange) * plotHeight;
+
+  // Split line X position
+  const isSplitVisible =
+    (activeSplitMode === 'combined' || activeSplitMode === 'full') &&
+    splitIndex !== undefined &&
+    splitIndex > 0 &&
+    splitIndex < totalPoints - 1;
+
+  const splitX = isSplitVisible && splitIndex ? getX(splitIndex) : null;
 
   // Zero/base line $1.00 position
   const base1Y = getY(1.0);
@@ -88,16 +103,61 @@ export const CumulativeReturnBacktestChart: React.FC<CumulativeReturnBacktestCha
     setHoveredIdx(null);
   };
 
+  const getChartTitle = () => {
+    switch (activeSplitMode) {
+      case 'in-sample':
+        return 'In-Sample Training Cumulative Return (80% Calibration Window)';
+      case 'out-of-sample':
+        return 'Out-of-Sample Forward Testing Return (Unseen 20% Window)';
+      case 'full':
+        return 'Full-Duration Cumulative Return Time Series';
+      case 'combined':
+      default:
+        return '80/20 In-Sample vs. Out-of-Sample Walk-Forward Backtest';
+    }
+  };
+
+  const getChartSubtitle = () => {
+    switch (activeSplitMode) {
+      case 'in-sample':
+        return `Normalized growth of $1.00 evaluated strictly over the 80% calibration training period.`;
+      case 'out-of-sample':
+        return `True walk-forward growth of $1.00 on unseen out-of-sample data with zero lookahead bias.`;
+      case 'full':
+        return `Normalized growth of $1.00 comparing ${strategyName} (${strategyUniverse}) against the 1/N Benchmark.`;
+      case 'combined':
+      default:
+        return `Continuous timeline showing the 80% training window demarcated from the 20% forward out-of-sample validation period.`;
+    }
+  };
+
   return (
     <div className="relative w-full overflow-hidden select-none bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
       {/* Header with Title and Dynamic Badge */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
         <div>
-          <h3 className="text-base font-bold text-slate-900 tracking-tight">
-            Full-Duration Cumulative Return Time Series
-          </h3>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Normalized growth of $1.00 comparing {strategyName} ({strategyUniverse}) against the 1/N Benchmark.
+          <div className="flex items-center gap-2 mb-1">
+            <h3 className="text-base font-bold text-slate-900 tracking-tight">
+              {getChartTitle()}
+            </h3>
+            {activeSplitMode === 'out-of-sample' && (
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200">
+                20% Forward Validation
+              </span>
+            )}
+            {activeSplitMode === 'in-sample' && (
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-blue-100 text-blue-800 border border-blue-200">
+                80% Training Window
+              </span>
+            )}
+            {activeSplitMode === 'combined' && (
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-indigo-100 text-indigo-800 border border-indigo-200">
+                80/20 Walk-Forward
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-slate-500">
+            {getChartSubtitle()}
           </p>
         </div>
         <div className="flex items-center gap-4 text-xs">
@@ -130,6 +190,38 @@ export const CumulativeReturnBacktestChart: React.FC<CumulativeReturnBacktestCha
               <feDropShadow dx="0" dy="2" stdDeviation="3" floodOpacity="0.25" floodColor="#2563eb" />
             </filter>
           </defs>
+
+          {/* Out-of-Sample background highlight area */}
+          {splitX !== null && (
+            <g>
+              <rect
+                x={splitX}
+                y={padding.top}
+                width={width - padding.right - splitX}
+                height={plotHeight}
+                fill="#3b82f6"
+                fillOpacity={0.045}
+              />
+              {/* Region Label: In-Sample */}
+              <text
+                x={(padding.left + splitX) / 2}
+                y={padding.top + 16}
+                textAnchor="middle"
+                className="text-[10px] font-bold fill-slate-400 uppercase tracking-widest pointer-events-none"
+              >
+                In-Sample (80% Train)
+              </text>
+              {/* Region Label: Out-of-Sample */}
+              <text
+                x={(splitX + (width - padding.right)) / 2}
+                y={padding.top + 16}
+                textAnchor="middle"
+                className="text-[10px] font-bold fill-blue-600 uppercase tracking-widest pointer-events-none"
+              >
+                Out-of-Sample (20% Test)
+              </text>
+            </g>
+          )}
 
           {/* Horizontal Grid lines & Y labels */}
           {yTicks.map((tick, i) => {
@@ -194,6 +286,42 @@ export const CumulativeReturnBacktestChart: React.FC<CumulativeReturnBacktestCha
             strokeLinejoin="round"
             points={strategyPoints}
           />
+
+          {/* 80/20 Vertical Demarcation Line & Top Tag */}
+          {splitX !== null && (
+            <g>
+              <line
+                x1={splitX}
+                y1={padding.top}
+                x2={splitX}
+                y2={padding.top + plotHeight}
+                stroke="#2563eb"
+                strokeWidth={1.75}
+                strokeDasharray="4 3"
+                opacity={0.8}
+              />
+              <g transform={`translate(${splitX}, ${padding.top - 14})`}>
+                <rect
+                  x="-75"
+                  y="-11"
+                  width="150"
+                  height="20"
+                  rx="10"
+                  fill="#0f172a"
+                  fillOpacity="0.92"
+                />
+                <text
+                  x="0"
+                  y="3"
+                  textAnchor="middle"
+                  fill="#93c5fd"
+                  className="text-[9.5px] font-bold tracking-wider font-mono"
+                >
+                  80% SPLIT ┆ 20% OOS
+                </text>
+              </g>
+            </g>
+          )}
 
           {/* Vertical Crosshair Line */}
           {hoveredIdx !== null && (
@@ -291,9 +419,20 @@ export const CumulativeReturnBacktestChart: React.FC<CumulativeReturnBacktestCha
 
       {/* Dynamic Summary Strip at Bottom */}
       <div className="mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 text-xs">
-        <div className="flex items-center gap-2 text-slate-500 font-mono">
+        <div className="flex flex-wrap items-center gap-2 text-slate-500 font-mono">
           <span className="font-semibold text-slate-700">Period:</span>
           <span>{activePoint.label} (Step {activePoint.index} of {totalPoints - 1})</span>
+          {activePoint.sampleType && (
+            <span
+              className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                activePoint.sampleType === 'out-of-sample'
+                  ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                  : 'bg-slate-100 text-slate-700 border border-slate-200'
+              }`}
+            >
+              {activePoint.sampleType === 'out-of-sample' ? 'Out-of-Sample (20%)' : 'In-Sample (80%)'}
+            </span>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-4 font-mono">

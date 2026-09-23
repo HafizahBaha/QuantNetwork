@@ -76,6 +76,8 @@ export interface BacktestDataPoint {
   strategyReturn: number;
   benchmarkDrawdown: number;
   strategyDrawdown: number;
+  sampleType?: 'in-sample' | 'out-of-sample';
+  isSplitPoint?: boolean;
 }
 
 export interface BacktestSummary {
@@ -103,5 +105,37 @@ export interface BacktestSummary {
   winRate: number;
   upCaptureRatio: number;
   downCaptureRatio: number;
+}
+
+export type SampleSplitMode = 'combined' | 'in-sample' | 'out-of-sample' | 'full';
+
+export interface SplitBacktestResult {
+  splitIndex: number;
+  splitRatio: number; // 0.8 (80%)
+  splitDateLabel: string;
+  inSampleCount: number;
+  outOfSampleCount: number;
+  inSample: {
+    series: BacktestDataPoint[];
+    summary: BacktestSummary;
+  };
+  outOfSample: {
+    series: BacktestDataPoint[];
+    summary: BacktestSummary;
+  };
+  fullDuration: {
+    series: BacktestDataPoint[];
+    summary: BacktestSummary;
+  };
+  robustness: {
+    sharpeDecayRatio: number; // OOS Sharpe / IS Sharpe
+    returnDecayRatio: number; // OOS Ann Return / IS Ann Return
+    alphaRetention: number;   // OOS Alpha / IS Alpha
+    isRobust: boolean;
+    overfittingRisk: 'Low' | 'Moderate' | 'High';
+    verdictMessage: string;
+  };
+  inSampleTrainedWeights?: Record<string, number>;
+  recalibratedOnInSample: boolean;
 }
 

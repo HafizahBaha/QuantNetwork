@@ -1,4 +1,4 @@
-import { AssetData, NetworkNode, NetworkEdge, PortfolioResult, Universe, CorrelationMatrix, NetworkData, StressTestConfig, BacktestDataPoint, BacktestSummary } from '../types';
+import { AssetData, NetworkNode, NetworkEdge, PortfolioResult, Universe, CorrelationMatrix, NetworkData, StressTestConfig, BacktestDataPoint, BacktestSummary, SplitBacktestResult, SampleSplitMode } from '../types';
 
 // --- MATH & STATS HELPERS ---
 const getMean = (data: number[]): number => data.reduce((a, b) => a + b, 0) / data.length;
@@ -170,57 +170,333 @@ function calculatePortfolioMetrics(model: string, universe: Universe, weights: R
   return { model, universe, weights, expectedReturn: annualizedReturn, volatility: annualizedVolatility, sharpeRatio, maxDrawdown, cvar, cumulativeReturns };
 }
 
+/**
+ * Projects an arbitrary vector v onto the probability simplex {w >= 0, sum(w) = 1}.
+ * Uses the exact O(N log N) sorting algorithm (Wang & Carreira-Perpinán, 2013).
+ */
+function projectSimplex(v: number[]): number[] {
+  const n = v.length;
+  if (n === 0) return [];
+  if (n === 1) return [1.0];
+
+  const sorted = [...v].sort((a, b) => b - a);
+  let cumSum = 0;
+  let rho = 0;
+  for (let i = 0; i < n; i++) {
+    cumSum += sorted[i];
+    if (sorted[i] + (1 - cumSum) / (i + 1) > 0) {
+      rho = i;
+    }
+  }
+  let sumRho = 0;
+  for (let i = 0; i <= rho; i++) {
+    sumRho += sorted[i];
+  }
+  const theta = (sumRho - 1) / (rho + 1);
+  const projected = v.map(x => Math.max(0, x - theta));
+  const total = projected.reduce((a, b) => a + b, 0);
+  if (total > 0) {
+    return projected.map(x => x / total);
+  }
+  return v.map(() => 1 / n);
+}
+
+/**
+ * Solves Markowitz Mean-Variance Tangency / Maximum Sharpe Ratio Portfolio.
+ * Maximizes (w^T * mu - Rf) / sqrt(w^T * Sigma * w) on the simplex {w >= 0, sum(w) = 1}.
+ */
+function solveMeanVarianceWeights(assets: AssetData[]): Record<string, number> {
+  const n = assets.length;
+  const symbols = assets.map(a => a.symbol);
+  const weights: Record<string, number> = {};
+  if (n === 0) return weights;
+  if (n === 1) {
+    weights[symbols[0]] = 1.0;
+    return weights;
+  }
+
+  const tradingDays = 252;
+  const rf = 0.02;
+
+  // Expected returns (annualized)
+  const mu = assets.map(a => getMean(a.returns) * tradingDays);
+
+  // Covariance matrix (annualized)
+  const sigma: number[][] = Array(n).fill(0).map(() => Array(n).fill(0));
+  for (let i = 0; i < n; i++) {
+    for (let j = i; j < n; j++) {
+      const c = getCovariance(assets[i].returns, assets[j].returns) * tradingDays;
+      sigma[i][j] = c;
+      sigma[j][i] = c;
+    }
+    sigma[i][i] += 1e-6; // Regularization
+  }
+
+  // Initial weights: inverse volatility
+  let w = assets.map(a => {
+    const s = getStdDev(a.returns);
+    return s > 0 ? 1 / s : 1;
+  });
+  const sumInit = w.reduce((a, b) => a + b, 0);
+  w = w.map(x => x / (sumInit || n));
+
+  const calcStats = (weightsVec: number[]) => {
+    let portMu = 0;
+    let portVar = 0;
+    for (let i = 0; i < n; i++) {
+      portMu += weightsVec[i] * mu[i];
+      let rowDot = 0;
+      for (let j = 0; j < n; j++) {
+        rowDot += sigma[i][j] * weightsVec[j];
+      }
+      portVar += weightsVec[i] * rowDot;
+    }
+    const portVol = Math.sqrt(Math.max(1e-8, portVar));
+    const sharpe = (portMu - rf) / portVol;
+    return { portMu, portVol, sharpe };
+  };
+
+  let bestW = [...w];
+  let bestSharpe = calcStats(w).sharpe;
+
+  // Projected Gradient Ascent to maximize Sharpe Ratio
+  const iterations = 150;
+  const lr = 0.1;
+
+  for (let iter = 0; iter < iterations; iter++) {
+    const { portMu, portVol } = calcStats(w);
+    const excess = portMu - rf;
+
+    const grad = new Array(n).fill(0);
+    for (let i = 0; i < n; i++) {
+      let sigmaDotW = 0;
+      for (let j = 0; j < n; j++) {
+        sigmaDotW += sigma[i][j] * w[j];
+      }
+      if (excess > 0) {
+        grad[i] = (mu[i] / portVol) - (excess * sigmaDotW) / (portVol * portVol * portVol);
+      } else {
+        // Fallback to minimum variance gradient
+        grad[i] = -sigmaDotW;
+      }
+    }
+
+    const step = lr / Math.sqrt(iter + 1);
+    const candidateV = w.map((wi, i) => wi + step * grad[i]);
+    const nextW = projectSimplex(candidateV);
+
+    const stats = calcStats(nextW);
+    if (stats.sharpe > bestSharpe) {
+      bestSharpe = stats.sharpe;
+      bestW = [...nextW];
+    }
+    w = nextW;
+  }
+
+  symbols.forEach((s, i) => {
+    weights[s] = bestW[i] > 1e-4 ? bestW[i] : 0;
+  });
+
+  const finalSum = Object.values(weights).reduce((a, b) => a + b, 0);
+  if (finalSum > 0) {
+    symbols.forEach(s => {
+      weights[s] = weights[s] / finalSum;
+    });
+  } else {
+    symbols.forEach(s => {
+      weights[s] = 1 / n;
+    });
+  }
+
+  return weights;
+}
+
+/**
+ * Solves for true Equal Risk Contribution (ERC) Risk Parity weights using
+ * Spinu's convex formulation (2013) and Cyclical Coordinate Descent (Griveau-Billion et al., 2013).
+ * Minimizes f(y) = 0.5 * y^T * Sigma * y - (1/N) * sum(ln(y_i)), then w = y / sum(y).
+ */
+function solveRiskParityWeights(assets: AssetData[]): Record<string, number> {
+  const n = assets.length;
+  const symbols = assets.map(a => a.symbol);
+  const weights: Record<string, number> = {};
+  if (n === 0) return weights;
+  if (n === 1) {
+    weights[symbols[0]] = 1.0;
+    return weights;
+  }
+
+  // Covariance matrix
+  const sigma: number[][] = Array(n).fill(0).map(() => Array(n).fill(0));
+  for (let i = 0; i < n; i++) {
+    for (let j = i; j < n; j++) {
+      const c = getCovariance(assets[i].returns, assets[j].returns);
+      sigma[i][j] = c;
+      sigma[j][i] = c;
+    }
+    sigma[i][i] = Math.max(1e-8, sigma[i][i]);
+  }
+
+  // Initialize y_i = 1 / sqrt(sigma_ii)
+  const y = assets.map((_, i) => 1 / Math.sqrt(sigma[i][i]));
+  const targetRiskBudget = 1.0 / n;
+
+  // Cyclical Coordinate Descent (CCD)
+  // At each coordinate i: a * y_i^2 + b * y_i - c = 0
+  // where a = sigma_ii, b = sum_{j != i} sigma_ij * y_j, c = 1 / N
+  // y_i = (-b + sqrt(b^2 + 4 * a * c)) / (2 * a)
+  const maxCycles = 40;
+  for (let cycle = 0; cycle < maxCycles; cycle++) {
+    for (let i = 0; i < n; i++) {
+      const a = sigma[i][i];
+      let b = 0;
+      for (let j = 0; j < n; j++) {
+        if (j !== i) {
+          b += sigma[i][j] * y[j];
+        }
+      }
+      const c = targetRiskBudget;
+      const discriminant = b * b + 4 * a * c;
+      y[i] = (-b + Math.sqrt(Math.max(0, discriminant))) / (2 * a);
+    }
+  }
+
+  const sumY = y.reduce((acc, val) => acc + val, 0);
+  symbols.forEach((s, i) => {
+    weights[s] = sumY > 0 ? y[i] / sumY : 1 / n;
+  });
+
+  return weights;
+}
+
+/**
+ * Minimizes Conditional Value at Risk (CVaR) at 95% confidence level
+ * using Projected Subgradient Descent on the unit simplex.
+ */
+function solveCvarWeights(assets: AssetData[]): Record<string, number> {
+  const n = assets.length;
+  const symbols = assets.map(a => a.symbol);
+  const weights: Record<string, number> = {};
+  if (n === 0) return weights;
+  if (n === 1) {
+    weights[symbols[0]] = 1.0;
+    return weights;
+  }
+
+  const numPeriods = assets[0]?.returns?.length || 0;
+  if (numPeriods < 5) {
+    symbols.forEach(s => {
+      weights[s] = 1 / n;
+    });
+    return weights;
+  }
+
+  // Pre-extract returns matrix for fast access: returnsMatrix[t][i]
+  const returnsMatrix: number[][] = [];
+  for (let t = 0; t < numPeriods; t++) {
+    const row = new Array(n);
+    for (let i = 0; i < n; i++) {
+      row[i] = assets[i].returns[t] || 0;
+    }
+    returnsMatrix.push(row);
+  }
+
+  const tailCount = Math.max(1, Math.floor(numPeriods * 0.05));
+
+  // Compute portfolio CVaR and its subgradient for a weight vector w
+  const evaluateCvar = (w: number[]) => {
+    const periodReturns: { returnVal: number; index: number }[] = [];
+    for (let t = 0; t < numPeriods; t++) {
+      let r = 0;
+      for (let i = 0; i < n; i++) {
+        r += w[i] * returnsMatrix[t][i];
+      }
+      periodReturns.push({ returnVal: r, index: t });
+    }
+
+    periodReturns.sort((a, b) => a.returnVal - b.returnVal);
+    const worstTail = periodReturns.slice(0, tailCount);
+
+    let sumTail = 0;
+    const subgrad = new Array(n).fill(0);
+    for (let k = 0; k < worstTail.length; k++) {
+      sumTail += worstTail[k].returnVal;
+      const t = worstTail[k].index;
+      for (let i = 0; i < n; i++) {
+        subgrad[i] -= returnsMatrix[t][i];
+      }
+    }
+    const cvarVal = -sumTail / tailCount;
+    for (let i = 0; i < n; i++) {
+      subgrad[i] /= tailCount;
+    }
+
+    return { cvarVal, subgrad };
+  };
+
+  // Initialize with equal weights
+  let w = symbols.map(() => 1 / n);
+  let bestW = [...w];
+  let minCvar = evaluateCvar(w).cvarVal;
+
+  const iterations = 100;
+  const initialStep = 0.08;
+
+  for (let iter = 0; iter < iterations; iter++) {
+    const { cvarVal, subgrad } = evaluateCvar(w);
+    if (cvarVal < minCvar) {
+      minCvar = cvarVal;
+      bestW = [...w];
+    }
+
+    const step = initialStep / Math.sqrt(iter + 1);
+    const nextUnprojected = w.map((wi, i) => wi - step * subgrad[i]);
+    w = projectSimplex(nextUnprojected);
+  }
+
+  symbols.forEach((s, i) => {
+    weights[s] = bestW[i] > 1e-4 ? bestW[i] : 0;
+  });
+
+  const finalSum = Object.values(weights).reduce((a, b) => a + b, 0);
+  if (finalSum > 0) {
+    symbols.forEach(s => {
+      weights[s] = weights[s] / finalSum;
+    });
+  } else {
+    symbols.forEach(s => {
+      weights[s] = 1 / n;
+    });
+  }
+
+  return weights;
+}
+
 function getWeights(model: string, assets: AssetData[]): Record<string, number> {
   const symbols = assets.map(a => a.symbol);
   const weights: Record<string, number> = {};
   if (symbols.length === 0) return weights;
 
-  switch(model) {
+  switch (model) {
     case '1/N (Benchmark)':
-    case 'Mean-Variance': // Heuristic: Inverse Volatility
-    case 'Risk Parity': // Heuristic: Inverse Volatility
-      const volatilities = assets.map(a => getStdDev(a.returns));
-      const invVolatilities = volatilities.map(v => v > 0 ? 1 / v : 0);
-      const sumInvVol = invVolatilities.reduce((sum, val) => sum + val, 0);
-      if (sumInvVol === 0) {
-        symbols.forEach(s => weights[s] = 1 / symbols.length);
-        return weights;
-      }
-      symbols.forEach((s, i) => weights[s] = invVolatilities[i] / sumInvVol);
+      symbols.forEach(s => {
+        weights[s] = 1 / symbols.length;
+      });
       return weights;
-    case 'CVaR': // Heuristic: Random Search
-      let bestWeights: Record<string, number> = {};
-      let minCvar = Infinity;
-      if (assets.length === 0 || assets[0].returns.length === 0) return weights;
 
-      // Initialize with 1/N
-      symbols.forEach(s => bestWeights[s] = 1 / symbols.length);
+    case 'Mean-Variance':
+      return solveMeanVarianceWeights(assets);
 
-      for (let i = 0; i < 500; i++) { // Reduced iterations for performance
-        const randomNumbers = symbols.map(() => Math.random());
-        const sumRandom = randomNumbers.reduce((sum, val) => sum + val, 0);
-        const currentWeights: Record<string, number> = {};
-        symbols.forEach((s, j) => currentWeights[s] = randomNumbers[j] / sumRandom);
-        
-        const tempPortfolioReturns: number[] = [];
-        for (let p = 0; p < assets[0].returns.length; p++) {
-            let periodReturn = 0;
-            assets.forEach(a => periodReturn += currentWeights[a.symbol] * a.returns[p]);
-            tempPortfolioReturns.push(periodReturn);
-        }
-        const sortedReturns = [...tempPortfolioReturns].sort((a, b) => a - b);
-        const cvarIndex = Math.floor(sortedReturns.length * 0.05);
-        const tailReturns = sortedReturns.slice(0, cvarIndex);
-        const currentCvar = tailReturns.length > 0 ? Math.abs(getMean(tailReturns)) : 0;
-        
-        if (currentCvar < minCvar) {
-          minCvar = currentCvar;
-          bestWeights = currentWeights;
-        }
-      }
-      return bestWeights;
+    case 'Risk Parity':
+      return solveRiskParityWeights(assets);
+
+    case 'CVaR':
+      return solveCvarWeights(assets);
+
     default:
-      symbols.forEach(s => weights[s] = 1 / symbols.length);
+      symbols.forEach(s => {
+        weights[s] = 1 / symbols.length;
+      });
       return weights;
   }
 }
@@ -554,5 +830,147 @@ export function calculateBacktest(
   };
 
   return { series, summary };
+}
+
+// --- 80/20 IN-SAMPLE & OUT-OF-SAMPLE TEST ENGINE ---
+export function calculate8020SplitBacktest(
+  benchmarkPortfolio: PortfolioResult,
+  strategyPortfolio: PortfolioResult,
+  assets: AssetData[],
+  dateLabels: string[] = [],
+  recalibrateOnInSample: boolean = false,
+  correlationThreshold: number = 0.5,
+  stressConfig?: StressTestConfig
+): SplitBacktestResult {
+  const totalPeriods = assets.length > 0 && assets[0].returns ? assets[0].returns.length : 0;
+  const splitRatio = 0.8;
+  const splitIndex = Math.max(2, Math.min(totalPeriods - 2, Math.floor(totalPeriods * splitRatio)));
+
+  let effectiveStrategyPortfolio = strategyPortfolio;
+  let inSampleWeights: Record<string, number> | undefined = undefined;
+
+  // If strict In-Sample calibration is enabled, train TMFG network & optimize weights strictly on the first 80%
+  if (recalibrateOnInSample && totalPeriods >= 5) {
+    try {
+      const inSampleAssets: AssetData[] = assets.map(a => ({
+        ...a,
+        returns: a.returns.slice(0, splitIndex),
+        dateLabels: a.dateLabels ? a.dateLabels.slice(0, splitIndex + 1) : []
+      }));
+
+      const inSampleMatrix = calculateCorrelationMatrix(inSampleAssets);
+      const inSampleAnalysis = runNetworkAndPortfolioAnalysis(
+        inSampleAssets,
+        inSampleMatrix,
+        correlationThreshold,
+        stressConfig
+      );
+
+      const matched = inSampleAnalysis.portfolios.find(
+        p => p.model === strategyPortfolio.model && p.universe === strategyPortfolio.universe
+      );
+
+      if (matched) {
+        effectiveStrategyPortfolio = {
+          ...strategyPortfolio,
+          weights: matched.weights
+        };
+        inSampleWeights = matched.weights;
+      }
+    } catch (e) {
+      console.warn("In-sample calibration fallback to full sample weights:", e);
+    }
+  }
+
+  // 1. Full continuous duration series (with sampleType attached)
+  const fullRes = calculateBacktest(benchmarkPortfolio, effectiveStrategyPortfolio, assets, dateLabels);
+  const fullSeriesWithTags: BacktestDataPoint[] = fullRes.series.map(pt => ({
+    ...pt,
+    sampleType: pt.index <= splitIndex ? 'in-sample' : 'out-of-sample',
+    isSplitPoint: pt.index === splitIndex
+  }));
+
+  // 2. In-sample slice: 0 to splitIndex
+  const inSampleAssets: AssetData[] = assets.map(a => ({
+    ...a,
+    returns: a.returns.slice(0, splitIndex)
+  }));
+  const inSampleDateLabels = dateLabels.slice(0, splitIndex + 1);
+  const inSampleRes = calculateBacktest(benchmarkPortfolio, effectiveStrategyPortfolio, inSampleAssets, inSampleDateLabels);
+  const inSampleSeriesTagged: BacktestDataPoint[] = inSampleRes.series.map(pt => ({
+    ...pt,
+    sampleType: 'in-sample',
+    isSplitPoint: pt.index === splitIndex
+  }));
+
+  // 3. Out-of-sample slice: splitIndex to totalPeriods
+  const outOfSampleAssets: AssetData[] = assets.map(a => ({
+    ...a,
+    returns: a.returns.slice(splitIndex)
+  }));
+  const outOfSampleDateLabels = dateLabels.slice(splitIndex);
+  const outOfSampleRes = calculateBacktest(benchmarkPortfolio, effectiveStrategyPortfolio, outOfSampleAssets, outOfSampleDateLabels);
+  const outOfSampleSeriesTagged: BacktestDataPoint[] = outOfSampleRes.series.map(pt => ({
+    ...pt,
+    sampleType: 'out-of-sample'
+  }));
+
+  // Robustness / Overfitting Analytics
+  const isSharpe = inSampleRes.summary.strategySharpeRatio;
+  const oosSharpe = outOfSampleRes.summary.strategySharpeRatio;
+  const isReturn = inSampleRes.summary.strategyAnnualizedReturn;
+  const oosReturn = outOfSampleRes.summary.strategyAnnualizedReturn;
+  const isAlpha = inSampleRes.summary.alpha;
+  const oosAlpha = outOfSampleRes.summary.alpha;
+
+  const sharpeDecayRatio = isSharpe !== 0 ? oosSharpe / isSharpe : 1;
+  const returnDecayRatio = isReturn !== 0 ? oosReturn / isReturn : 1;
+  const alphaRetention = isAlpha !== 0 ? oosAlpha / isAlpha : 1;
+
+  let overfittingRisk: 'Low' | 'Moderate' | 'High' = 'Low';
+  let verdictMessage = '';
+
+  if (oosSharpe >= 0.75 * isSharpe || (oosSharpe > 0.8 && oosSharpe >= isSharpe - 0.3)) {
+    overfittingRisk = 'Low';
+    verdictMessage = 'Robust Generalization: Strategy preserved high Sharpe efficiency on unseen out-of-sample data with zero parameter overfitting.';
+  } else if (oosSharpe >= 0.35 * isSharpe && oosSharpe > 0) {
+    overfittingRisk = 'Moderate';
+    verdictMessage = 'Moderate Decay: Out-of-sample performance experienced some volatility drag compared to in-sample training, but maintains alpha.';
+  } else {
+    overfittingRisk = 'High';
+    verdictMessage = 'Overfitting Alert: Severe out-of-sample degradation indicates that optimization weights may have overfit in-sample idiosyncratic noise.';
+  }
+
+  const splitDateLabel = fullRes.series[splitIndex]?.label || `Period ${splitIndex}`;
+
+  return {
+    splitIndex,
+    splitRatio,
+    splitDateLabel,
+    inSampleCount: splitIndex,
+    outOfSampleCount: totalPeriods - splitIndex,
+    inSample: {
+      series: inSampleSeriesTagged,
+      summary: inSampleRes.summary
+    },
+    outOfSample: {
+      series: outOfSampleSeriesTagged,
+      summary: outOfSampleRes.summary
+    },
+    fullDuration: {
+      series: fullSeriesWithTags,
+      summary: fullRes.summary
+    },
+    robustness: {
+      sharpeDecayRatio,
+      returnDecayRatio,
+      alphaRetention,
+      isRobust: overfittingRisk === 'Low',
+      overfittingRisk,
+      verdictMessage
+    },
+    inSampleTrainedWeights: inSampleWeights,
+    recalibratedOnInSample: recalibrateOnInSample
+  };
 }
 

@@ -7,7 +7,7 @@ import {
   exportAssetMetricsCsv,
   exportBacktestCsv,
 } from '../utils/csvExporter';
-import { calculateBacktest } from '../services/financialCalculations';
+import { calculateBacktest, calculate8020SplitBacktest } from '../services/financialCalculations';
 
 interface DownloadCsvMenuProps {
   assets: AssetData[];
@@ -67,9 +67,13 @@ export const DownloadCsvMenu: React.FC<DownloadCsvMenuProps> = ({
         : reportData.portfolios.find(p => p.model !== '1/N (Benchmark)') || reportData.portfolios[0];
 
       const dateLabels = assets[0]?.dateLabels || [];
-      const res = calculateBacktest(benchmark, strategy, assets, dateLabels);
-      exportBacktestCsv({ summary: res.summary, series: res.series });
-      setDownloadSuccess('Backtest CSV Downloaded');
+      const splitRes = calculate8020SplitBacktest(benchmark, strategy, assets, dateLabels, false, threshold);
+      exportBacktestCsv({
+        summary: splitRes.fullDuration.summary,
+        series: splitRes.fullDuration.series,
+        splitResult: splitRes,
+      });
+      setDownloadSuccess('80/20 Backtest CSV Downloaded');
     }
 
     setTimeout(() => {

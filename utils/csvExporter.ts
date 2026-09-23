@@ -1,4 +1,4 @@
-import { AssetData, NetworkData, PortfolioResult, ReportData, BacktestDataPoint, BacktestSummary } from '../types';
+import { AssetData, NetworkData, PortfolioResult, ReportData, BacktestDataPoint, BacktestSummary, SplitBacktestResult } from '../types';
 
 /**
  * Escapes a cell value for standard CSV formatting (RFC 4180).
@@ -341,27 +341,58 @@ export const exportAssetMetricsCsv = ({
 
 /**
  * Exports historical backtest results and cumulative return series to CSV.
+ * Supports optional 80/20 In-Sample vs. Out-of-Sample quantitative breakdown.
  */
 export const exportBacktestCsv = ({
   summary,
   series,
+  splitResult,
 }: {
   summary: BacktestSummary;
   series: BacktestDataPoint[];
+  splitResult?: SplitBacktestResult | null;
 }): void => {
   const fileDate = new Date().toISOString().slice(0, 10);
   const cleanStrategyName = `${summary.strategyName.replace(/[^a-zA-Z0-9]/g, '_')}_${summary.strategyUniverse}`;
 
   const summaryRows = [
-    '# HISTORICAL FULL DURATION BACKTEST REPORT',
+    '# HISTORICAL FULL DURATION & 80/20 WALK-FORWARD BACKTEST REPORT',
     `# Export Date: ${new Date().toISOString().slice(0, 10)}`,
     `# Strategy Model: ${summary.strategyName}`,
     `# Strategy Universe: ${summary.strategyUniverse}`,
     `# Benchmark: 1/N (Equally Weighted Benchmark)`,
     `# Total Periods: ${summary.totalPeriods}`,
     `# Date Range: ${summary.startDateLabel} to ${summary.endDateLabel}`,
+  ];
+
+  if (splitResult) {
+    summaryRows.push(
+      `# 80/20 Split Point: Period ${splitResult.splitIndex} (${splitResult.splitDateLabel})`,
+      `# In-Sample Periods (80% Train): ${splitResult.inSampleCount}`,
+      `# Out-of-Sample Periods (20% Test): ${splitResult.outOfSampleCount}`,
+      `# Calibration Type: ${splitResult.recalibratedOnInSample ? 'Strict 80% In-Sample Optimization' : 'Full-Sample Portfolio Weights'}`,
+      `# Overfitting Risk Verdict: ${splitResult.robustness.overfittingRisk}`,
+      `# Sharpe Decay Ratio (OOS/IS): ${(splitResult.robustness.sharpeDecayRatio * 100).toFixed(2)}%`,
+      `# Robustness Message: ${splitResult.robustness.verdictMessage}`,
+      '',
+      '# --- 80/20 IN-SAMPLE vs OUT-OF-SAMPLE COMPARATIVE ATTRIBUTION ---',
+      'Metric,In-Sample (80% Train),Out-of-Sample (20% Test),Full Duration (100%),1/N Benchmark (OOS)',
+      `Total Return,${(splitResult.inSample.summary.strategyTotalReturn * 100).toFixed(4)}%,${(splitResult.outOfSample.summary.strategyTotalReturn * 100).toFixed(4)}%,${(splitResult.fullDuration.summary.strategyTotalReturn * 100).toFixed(4)}%,${(splitResult.outOfSample.summary.benchmarkTotalReturn * 100).toFixed(4)}%`,
+      `Annualized Return,${(splitResult.inSample.summary.strategyAnnualizedReturn * 100).toFixed(4)}%,${(splitResult.outOfSample.summary.strategyAnnualizedReturn * 100).toFixed(4)}%,${(splitResult.fullDuration.summary.strategyAnnualizedReturn * 100).toFixed(4)}%,${(splitResult.outOfSample.summary.benchmarkAnnualizedReturn * 100).toFixed(4)}%`,
+      `Annualized Volatility,${(splitResult.inSample.summary.strategyAnnualizedVol * 100).toFixed(4)}%,${(splitResult.outOfSample.summary.strategyAnnualizedVol * 100).toFixed(4)}%,${(splitResult.fullDuration.summary.strategyAnnualizedVol * 100).toFixed(4)}%,${(splitResult.outOfSample.summary.benchmarkAnnualizedVol * 100).toFixed(4)}%`,
+      `Sharpe Ratio (Rf=2%),${splitResult.inSample.summary.strategySharpeRatio.toFixed(4)},${splitResult.outOfSample.summary.strategySharpeRatio.toFixed(4)},${splitResult.fullDuration.summary.strategySharpeRatio.toFixed(4)},${splitResult.outOfSample.summary.benchmarkSharpeRatio.toFixed(4)}`,
+      `Max Drawdown,${(splitResult.inSample.summary.strategyMaxDrawdown * 100).toFixed(4)}%,${(splitResult.outOfSample.summary.strategyMaxDrawdown * 100).toFixed(4)}%,${(splitResult.fullDuration.summary.strategyMaxDrawdown * 100).toFixed(4)}%,${(splitResult.outOfSample.summary.benchmarkMaxDrawdown * 100).toFixed(4)}%`,
+      `Jensen Alpha (Ann.),${(splitResult.inSample.summary.alpha * 100).toFixed(4)}%,${(splitResult.outOfSample.summary.alpha * 100).toFixed(4)}%,${(splitResult.fullDuration.summary.alpha * 100).toFixed(4)}%,N/A`,
+      `Beta (vs Benchmark),${splitResult.inSample.summary.beta.toFixed(4)},${splitResult.outOfSample.summary.beta.toFixed(4)},${splitResult.fullDuration.summary.beta.toFixed(4)},1.0000`,
+      `Tracking Error (Ann.),${(splitResult.inSample.summary.trackingError * 100).toFixed(4)}%,${(splitResult.outOfSample.summary.trackingError * 100).toFixed(4)}%,${(splitResult.fullDuration.summary.trackingError * 100).toFixed(4)}%,N/A`,
+      `Information Ratio,${splitResult.inSample.summary.informationRatio.toFixed(4)},${splitResult.outOfSample.summary.informationRatio.toFixed(4)},${splitResult.fullDuration.summary.informationRatio.toFixed(4)},N/A`,
+      `Win Rate (% periods beating BM),${(splitResult.inSample.summary.winRate * 100).toFixed(2)}%,${(splitResult.outOfSample.summary.winRate * 100).toFixed(2)}%,${(splitResult.fullDuration.summary.winRate * 100).toFixed(2)}%,N/A`
+    );
+  }
+
+  summaryRows.push(
     '',
-    '# --- PERFORMANCE & RISK SUMMARY ---',
+    '# --- OVERALL PERFORMANCE & RISK SUMMARY ---',
     'Metric,Strategy,Benchmark,Difference / Alpha',
     `Total Return,${(summary.strategyTotalReturn * 100).toFixed(4)}%,${(summary.benchmarkTotalReturn * 100).toFixed(4)}%,${((summary.strategyTotalReturn - summary.benchmarkTotalReturn) * 100).toFixed(4)}%`,
     `Annualized Return,${(summary.strategyAnnualizedReturn * 100).toFixed(4)}%,${(summary.benchmarkAnnualizedReturn * 100).toFixed(4)}%,${((summary.strategyAnnualizedReturn - summary.benchmarkAnnualizedReturn) * 100).toFixed(4)}%`,
@@ -377,11 +408,12 @@ export const exportBacktestCsv = ({
     `Down Market Capture Ratio,${summary.downCaptureRatio.toFixed(2)}%,100.00%,N/A`,
     '',
     '# --- HISTORICAL CUMULATIVE RETURN TIME SERIES ---',
-    'Index,Period_Label,Strategy_Value,Benchmark_Value,Strategy_Return,Benchmark_Return,Strategy_Drawdown,Benchmark_Drawdown',
+    'Index,Period_Label,Sample_Type,Strategy_Value,Benchmark_Value,Strategy_Return,Benchmark_Return,Strategy_Drawdown,Benchmark_Drawdown',
     ...series.map(d =>
       [
         d.index,
         escapeCsv(d.label),
+        d.sampleType === 'out-of-sample' ? 'OUT_OF_SAMPLE' : 'IN_SAMPLE',
         d.strategyValue.toFixed(6),
         d.benchmarkValue.toFixed(6),
         d.strategyReturn.toFixed(6),
@@ -389,9 +421,9 @@ export const exportBacktestCsv = ({
         (d.strategyDrawdown * 100).toFixed(4) + '%',
         (d.benchmarkDrawdown * 100).toFixed(4) + '%',
       ].join(',')
-    ),
-  ];
+    )
+  );
 
-  downloadCsvFile(summaryRows.join('\r\n'), `TMFG_Backtest_${cleanStrategyName}_vs_1N_${fileDate}.csv`);
+  downloadCsvFile(summaryRows.join('\r\n'), `TMFG_Backtest_${cleanStrategyName}_80_20_WalkForward_${fileDate}.csv`);
 };
 
