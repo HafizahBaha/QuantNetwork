@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QuantNetwork TMFG</title>
+  <meta name="description" content="An advanced financial analysis tool that uses TMFG network graphs, multiple portfolio optimization models, and AI-driven insights to perform quantitative asset allocation." />
+  <meta property="og:title" content="QuantNetwork TMFG" />
+  <meta property="og:description" content="An advanced financial analysis tool that uses TMFG network graphs, multiple portfolio optimization models, and AI-driven insights to perform quantitative asset allocation." />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- PDF generation libraries -->
+  <script src="https://unpkg.com/jspdf@latest/dist/jspdf.umd.min.js"></script>
+  <script src="https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'slate-50': '#f8fafc',
+            'slate-100': '#f1f5f9',
+            'slate-200': '#e2e8f0',
+            'slate-400': '#94a3b8',
+            'slate-500': '#64748b',
+            'slate-800': '#1e293b',
+            'slate-900': '#0f172a',
+            'blue-50': '#eff6ff',
+            'blue-100': '#dbeafe',
+            'blue-400': '#60a5fa',
+            'blue-500': '#3b82f6',
+            'blue-600': '#2563eb',
+            'blue-800': '#1e40af',
+            'blue-900': '#1e3a8a',
+          },
+          keyframes: {
+            'fade-in': {
+              '0%': { opacity: '0' },
+              '100%': { opacity: '1' },
+            },
+          },
+          animation: {
+            'fade-in': 'fade-in 0.5s ease-in-out',
+          },
+        }
+      }
+    }
+  </script>
+<style>
+  @media print {
+    body {
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+      background: #ffffff !important;
+      background-color: #ffffff !important;
+    }
+    header, footer, nav, #print-button, #export-pdf-button, #download-csv-container, .no-print {
+      display: none !important;
+    }
+    main {
+      padding: 0 !important;
+      margin: 0 !important;
+      max-width: 100% !important;
+      box-shadow: none !important;
+      border: none !important;
+    }
+    .report-container {
+      box-shadow: none !important;
+      border: none !important;
+      padding: 0 !important;
+    }
+    section, table, tr, .bg-white, .rounded-2xl {
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+  }
+</style>
+</head>
+<body class="bg-slate-100 font-sans antialiased">
+  <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>

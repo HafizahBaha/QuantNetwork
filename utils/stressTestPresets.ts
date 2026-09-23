@@ -1,0 +1,58 @@
+import { StressTestPreset } from '../types';
+
+export const STRESS_TEST_PRESETS: StressTestPreset[] = [
+  {
+    id: 'vol-spike-mild',
+    name: 'Mild Volatility Spike (+50%)',
+    description: 'Elevated market turbulence with a 1.5x volatility multiplier and modest correlation contagion (+0.15).',
+    volatilityMultiplier: 1.5,
+    correlationShock: 0.15,
+    marketDriftShock: -0.05,
+    targetUniverse: 'All',
+  },
+  {
+    id: 'crisis-2008',
+    name: '2008 Liquidity Crisis (Severe)',
+    description: 'Severe systemic credit crunch with 2.5x volatility, high correlation contagion (+0.40), and -25% market drawdown.',
+    volatilityMultiplier: 2.5,
+    correlationShock: 0.40,
+    marketDriftShock: -0.25,
+    targetUniverse: 'All',
+  },
+  {
+    id: 'flash-crash',
+    name: 'Flash Crash / Tech Selloff',
+    description: 'Acute systemic shock primarily hitting central and highly liquid core assets (+100% vol, -20% drift).',
+    volatilityMultiplier: 2.0,
+    correlationShock: 0.25,
+    marketDriftShock: -0.20,
+    targetUniverse: 'Core',
+  },
+  {
+    id: 'periphery-flight',
+    name: 'Flight from Small/Periphery Assets',
+    description: 'Liquidity freezes and heightened risk premiums impacting peripheral and diversifying assets disproportionately.',
+    volatilityMultiplier: 2.2,
+    correlationShock: 0.20,
+    marketDriftShock: -0.15,
+    targetUniverse: 'Periphery',
+  },
+  {
+    id: 'stagflation-shock',
+    name: 'Stagflation / Interest Rate Surge',
+    description: 'Broad macro headwinds with doubled volatility (2.0x), persistent negative return drift (-15%), and +0.30 correlation.',
+    volatilityMultiplier: 2.0,
+    correlationShock: 0.30,
+    marketDriftShock: -0.15,
+    targetUniverse: 'All',
+  },
+  {
+    id: 'decorrelation-dispersion',
+    name: 'Dispersion / De-correlation Regime',
+    description: 'High cross-sectional dispersion where asset correlations decrease (-0.25) while individual asset volatility increases (1.6x).',
+    volatilityMultiplier: 1.6,
+    correlationShock: -0.25,
+    marketDriftShock: 0.0,
+    targetUniverse: 'All',
+  },
+];

@@ -1,0 +1,8 @@
+{
+  "name": "QuantNetwork TMFG",
+  "description": "An advanced financial analysis tool that uses TMFG network graphs, multiple portfolio optimization models, and AI-driven insights to perform quantitative asset allocation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
